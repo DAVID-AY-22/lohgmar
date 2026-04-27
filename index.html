@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>LogMAR + Face Distance System</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<style>
+body {
+    margin: 0;
+    background: #121212;
+    color: white;
+    font-family: Arial;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+/* PANTALLAS */
+.screen { display: none; flex-direction: column; align-items: center; width: 100%; }
+.active { display: flex; }
+
+/* SELECCIÓN */
+.card {
+    background: #1e1e1e;
+    padding: 20px;
+    margin: 15px;
+    border-radius: 12px;
+    cursor: pointer;
+    width: 200px;
+    text-align: center;
+    transition: 0.2s;
+}
+.card:hover { transform: scale(1.05); }
+
+/* CÁMARA */
+.container {
+    position: relative;
+    width: 640px;
+    height: 480px;
+    background: black;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+video, canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform: scaleX(-1);
+}
+
+/* TEST */
+.optotype-box {
+    width: 500px;
+    height: 400px;
+    background: white;
+    color: black;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 80px;
+    font-weight: bold;
+    border-radius: 12px;
+    margin: 20px;
+}
+
+.btn {
+    padding: 10px 15px;
+    margin: 10px;
+    cursor: pointer;
+    font-weight: bold;
+}
+</style>
+</head>
+
+<body>
+
+<!-- SELECCIÓN -->
+<div id="selection" class="screen active">
+    <h2>Selecciona el test</h2>
+
+    <div class="card" onclick="selectTest('raskin')">
+        Letra Raskin (E)
+    </div>
+
+    <div class="card" onclick="selectTest('lea')">
+        Figuras LEA
+    </div>
+</div>
+
+<!-- CÁMARA -->
+<div id="camera" class="screen">
+    <h2>Calibración de distancia</h2>
+
+    <button class="btn" onclick="startCamera()">Encender cámara</button>
+
+    <div class="container">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="canvas" width="640" height="480"></canvas>
+    </div>
+
+    <h3>Distancia: <span id="dist">--</span> cm</h3>
+
+    <button id="startTestBtn" class="btn" disabled onclick="startTest()">
+        Iniciar Test
+    </button>
+</div>
+
+<!-- TEST -->
+<div id="test" class="screen">
+    <h3>Pregunta <span id="qnum">1</span>/10 | LogMAR: <span id="logmar">0.7</span></h3>
+
+    <div class="optotype-box" id="optotype">E</div>
+
+    <div id="options"></div>
+</div>
+
+<script>
+
+let testType = "raskin";
+let logMAR = 0.7;
+let question = 0;
+
+const RASKIN = [0, 90, 180, 270];
+const LEA = ["Δ","○","□","☆"];
+
+let camera;
+
+// ---------------- SELECCIÓN ----------------
+function selectTest(type) {
+    testType = type;
+    document.getElementById("selection").classList.remove("active");
+    document.getElementById("camera").classList.add("active");
+}
+
+// ---------------- CÁMARA ----------------
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+const faceMesh = new FaceMesh({
+    locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+});
+
+faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true
+});
+
+faceMesh.onResults(onResults);
+
+function startCamera() {
+    camera = new Camera(video, {
+        onFrame: async () => {
+            await faceMesh.send({ image: video });
+        },
+        width: 640,
+        height: 480
+    });
+
+    camera.start();
+}
+
+// ---------------- DISTANCIA ----------------
+function onResults(results) {
+    ctx.clearRect(0,0,640,480);
+    ctx.drawImage(results.image,0,0,640,480);
+
+    if (!results.multiFaceLandmarks?.length) return;
+
+    const lm = results.multiFaceLandmarks[0];
+
+    const dx = (lm[263].x - lm[33].x) * 640;
+    const dy = (lm[263].y - lm[33].y) * 480;
+
+    const px = Math.sqrt(dx*dx + dy*dy);
+
+    if (px > 0) {
+        const cm = (6.3 * 750) / px;
+        document.getElementById("dist").innerText = cm.toFixed(1);
+
+        const ok = cm >= 35 && cm <= 45;
+
+        const btn = document.getElementById("startTestBtn");
+        btn.disabled = !ok;
+
+        btn.style.background = ok ? "lime" : "#444";
+        btn.style.color = ok ? "black" : "#999";
+    }
+}
+
+// ---------------- INICIAR TEST ----------------
+function startTest() {
+    document.getElementById("camera").classList.remove("active");
+    document.getElementById("test").classList.add("active");
+    render();
+}
+
+// ---------------- TEST LOGMAR ----------------
+function render() {
+    if (question >= 10) return finish();
+
+    document.getElementById("qnum").innerText = question + 1;
+    document.getElementById("logmar").innerText = logMAR.toFixed(1);
+
+    const opt = document.getElementById("optotype");
+    const container = document.getElementById("options");
+
+    container.innerHTML = "";
+
+    const size = 50 * Math.pow(10, logMAR);
+    opt.style.fontSize = size + "px";
+
+    if (testType === "raskin") {
+        const correct = RASKIN[Math.floor(Math.random()*4)];
+        opt.innerText = "E";
+        opt.style.transform = `rotate(${correct}deg)`;
+
+        RASKIN.forEach(r => {
+            const b = document.createElement("button");
+            b.innerHTML = `<div style="transform:rotate(${r}deg);font-size:40px">E</div>`;
+            b.onclick = () => answer(r === correct);
+            container.appendChild(b);
+        });
+
+    } else {
+        const correct = LEA[Math.floor(Math.random()*4)];
+        opt.innerText = correct;
+        opt.style.transform = "none";
+
+        LEA.forEach(s => {
+            const b = document.createElement("button");
+            b.innerText = s;
+            b.onclick = () => answer(s === correct);
+            container.appendChild(b);
+        });
+    }
+}
+
+function answer(ok) {
+    if (ok) logMAR -= 0.1;
+    else logMAR += 0.1;
+
+    logMAR = Math.max(-0.2, Math.min(0.7, logMAR));
+
+    question++;
+    render();
+}
+
+function finish() {
+    const snellen = Math.round(20 * Math.pow(10, logMAR));
+    alert(`Test terminado\nLogMAR: ${logMAR.toFixed(1)}\nSnellen: 20/${snellen}`);
+    location.reload();
+}
+
+</script>
+
+</body>
+</html>
